@@ -67,19 +67,19 @@ class TelegramSender:
 
         lines = []
         
-        # 1. 제목 (헤드라인 한 줄)
+        # 1. 제목
         headline = truncate(news.headline, 80)
         lines.append(f"{star} *제목* {self._escape_md(headline)}")
 
-        # 2. 요약 (의미 또는 핵심, 한 줄)
+        # 2. 요약
         summary = news.meaning or news.core
         summary_short = truncate(summary, 100)
         lines.append(f"💡 *요약* {self._escape_md(summary_short)}")
 
-        # 3. 수혜주 (관련 종목, 한 줄)
+        # 3. 수혜주
         if news.matched_company_pages:
             company_strs = []
-            for c in news.matched_company_pages[:3]:  # 최대 3개
+            for c in news.matched_company_pages[:3]:
                 name = self._escape_md(c["name"])
                 ticker = c.get("ticker", "")
                 ir_badge = "💼" if c.get("has_ir_note") else ""
@@ -87,18 +87,21 @@ class TelegramSender:
                     company_strs.append(f"{name}({ticker}){ir_badge}")
                 else:
                     company_strs.append(f"{name}{ir_badge}")
-            lines.append(f"🎯 *수혜주* {', '.join(company_strs)}")
+            companies_str = ", ".join(company_strs)
+            lines.append(f"🎯 *수혜주* {companies_str}")
         else:
             lines.append(f"🎯 *수혜주* \\-")
 
-        # 4. 링크 (원문 + Notion)
+        # 4. 링크 (백슬래시 변수로 처리)
         url = news.raw.url
         source = self._escape_md(news.raw.source)
         link_parts = [f"[{source}]({url})"]
         if news.notion_page_id:
             page_url = f"https://www.notion.so/{news.notion_page_id.replace('-', '')}"
             link_parts.append(f"[Notion]({page_url})")
-        lines.append(f"🔗 *링크* {' \\| '.join(link_parts)}")
+        separator = " \\| "
+        links_str = separator.join(link_parts)
+        lines.append(f"🔗 *링크* {links_str}")
 
         return "\n".join(lines)
 
@@ -109,7 +112,8 @@ class TelegramSender:
     ) -> str:
         """카테고리 섹션."""
         emoji = CATEGORY_EMOJI.get(category, "📌")
-        header = f"\n{emoji} *{category}* \\({len(news_list)}건\\)"
+        count = len(news_list)
+        header = f"\n{emoji} *{category}* \\({count}건\\)"
 
         blocks = [self.build_news_block(news) for news in news_list]
         return header + "\n\n" + "\n\n".join(blocks)
@@ -124,10 +128,14 @@ class TelegramSender:
             if any(c.get("has_ir_note") for c in n.matched_company_pages)
         )
 
+        separator = " \\| "
+        footer_parts = [f"📊 총 {total}건", f"🔥 {critical}건", f"💼 {with_ir}건"]
+        footer_str = separator.join(footer_parts)
+
         lines = [
             "",
             "━━━━━━━━━━━━━━━━━━━━",
-            f"📊 총 {total}건 \\| 🔥 {critical}건 \\| 💼 {with_ir}건",
+            footer_str,
         ]
         return "\n".join(lines)
 
