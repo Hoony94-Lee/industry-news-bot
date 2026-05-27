@@ -57,24 +57,32 @@ class TelegramSender:
         return f"{title}\n━━━━━━━━━━━━━━━━━━━━"
 
     def build_news_block(self, news: ProcessedNews) -> str:
-        """단일 뉴스 4줄 포맷."""
+        """단일 뉴스 블록.
+        
+        포맷:
+        제목내용 (별표/이모티콘 없이)
+        - 요약: 요약 내용
+        - 수혜주: 종목명(티커)
+        - 링크:
+        https://www.example.com/...
+        """
         if news.importance >= 5:
-            star = "🔥"
+            star = "🔥 "
         elif news.importance >= 4:
-            star = "⭐"
+            star = "⭐ "
         else:
-            star = "📰"
+            star = ""
 
         lines = []
         
-        # 1. 제목
+        # 1. 제목 (별표만, "제목" 텍스트 없이)
         headline = truncate(news.headline, 80)
-        lines.append(f"{star} *제목* {self._escape_md(headline)}")
+        lines.append(f"{star}*{self._escape_md(headline)}*")
 
         # 2. 요약
         summary = news.meaning or news.core
         summary_short = truncate(summary, 100)
-        lines.append(f"💡 *요약* {self._escape_md(summary_short)}")
+        lines.append(f"\\- 요약: {self._escape_md(summary_short)}")
 
         # 3. 수혜주
         if news.matched_company_pages:
@@ -84,24 +92,18 @@ class TelegramSender:
                 ticker = c.get("ticker", "")
                 ir_badge = "💼" if c.get("has_ir_note") else ""
                 if ticker:
-                    company_strs.append(f"{name}({ticker}){ir_badge}")
+                    company_strs.append(f"{name}\\({ticker}\\){ir_badge}")
                 else:
                     company_strs.append(f"{name}{ir_badge}")
             companies_str = ", ".join(company_strs)
-            lines.append(f"🎯 *수혜주* {companies_str}")
+            lines.append(f"\\- 수혜주: {companies_str}")
         else:
-            lines.append(f"🎯 *수혜주* \\-")
+            lines.append(f"\\- 수혜주: \\-")
 
-        # 4. 링크 (백슬래시 변수로 처리)
+        # 4. 링크 (원문만, 괄호 없이 줄바꿈으로 표시)
         url = news.raw.url
-        source = self._escape_md(news.raw.source)
-        link_parts = [f"[{source}]({url})"]
-        if news.notion_page_id:
-            page_url = f"https://www.notion.so/{news.notion_page_id.replace('-', '')}"
-            link_parts.append(f"[Notion]({page_url})")
-        separator = " \\| "
-        links_str = separator.join(link_parts)
-        lines.append(f"🔗 *링크* {links_str}")
+        lines.append(f"\\- 링크:")
+        lines.append(self._escape_url(url))
 
         return "\n".join(lines)
 
@@ -112,41 +114,34 @@ class TelegramSender:
     ) -> str:
         """카테고리 섹션."""
         emoji = CATEGORY_EMOJI.get(category, "📌")
-        count = len(news_list)
-        header = f"\n{emoji} *{category}* \\({count}건\\)"
+        header = f"\n{emoji} *{category}*"
 
         blocks = [self.build_news_block(news) for news in news_list]
         return header + "\n\n" + "\n\n".join(blocks)
 
-    def build_summary_footer(self, processed_list: list[ProcessedNews]) -> str:
-        """요약 푸터."""
-        total = len(processed_list)
-        critical = sum(1 for n in processed_list if n.importance >= 5)
-        with_ir = sum(
-            1
-            for n in processed_list
-            if any(c.get("has_ir_note") for c in n.matched_company_pages)
-        )
-
-        separator = " \\| "
-        footer_parts = [f"📊 총 {total}건", f"🔥 {critical}건", f"💼 {with_ir}건"]
-        footer_str = separator.join(footer_parts)
-
-        lines = [
-            "",
-            "━━━━━━━━━━━━━━━━━━━━",
-            footer_str,
-        ]
-        return "\n".join(lines)
-
     @staticmethod
     def _escape_md(text: str) -> str:
-        """Telegram MarkdownV2 이스케이프."""
+        """Telegram MarkdownV2 이스케이프 (일반 텍스트용)."""
         if not text:
             return ""
         special_chars = r"_*[]()~`>#+-=|{}.!"
         result = []
         for char in text:
+            if char in special_chars:
+                result.append(f"\\{char}")
+            else:
+                result.append(char)
+        return "".join(result)
+
+    @staticmethod
+    def _escape_url(url: str) -> str:
+        """URL용 이스케이프 (괄호와 점만)."""
+        if not url:
+            return ""
+        # URL에서 MarkdownV2가 문제삼는 문자만 이스케이프
+        result = []
+        special_chars = r"_*[]()~`>#+-=|{}.!"
+        for char in url:
             if char in special_chars:
                 result.append(f"\\{char}")
             else:
@@ -240,7 +235,8 @@ class TelegramSender:
                 items.sort(key=lambda x: x.importance, reverse=True)
                 sections.append(self.build_category_section(cat, items))
 
-        sections.append(self.build_summary_footer(processed_list))
+        # 푸터 제거: 더이상 "총 X건" 안 보냄
+
         full_message = "\n".join(sections)
 
         chunks = self._split_long_message(full_message)
