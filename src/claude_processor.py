@@ -20,7 +20,7 @@ from .utils import (
 )
 
 
-# Haiku 4.5 - 빠르고 저렴
+# Haiku 4.5
 CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 
 
@@ -57,8 +57,74 @@ class ClaudeNewsProcessor:
             return match.group(1).strip()
         return "당신은 한국 ECM 담당자의 산업 리서치 어시스턴트입니다."
 
+    def _extract_json(self, content: str) -> dict | None:
+        """응답 텍스트에서 JSON 객체를 강건하게 추출.
+        
+        Haiku 모델이 JSON 뒤에 부연 설명을 붙이거나, 
+        마크다운 fence를 추가하는 경우에 대응.
+        """
+        if not content:
+            return None
+        
+        # 1) 마크다운 코드 fence 제거
+        content = re.sub(r"^```(?:json)?\s*", "", content.strip())
+        content = re.sub(r"\s*```$", "", content)
+        content = content.strip()
+        
+        # 2) 일반적인 JSON 파싱 시도
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            pass
+        
+        # 3) 첫 번째 완전한 JSON 객체만 추출 (중괄호 매칭)
+        start = content.find('{')
+        if start == -1:
+            return None
+        
+        depth = 0
+        end = -1
+        in_string = False
+        escape_next = False
+        
+        for i in range(start, len(content)):
+            char = content[i]
+            
+            if escape_next:
+                escape_next = False
+                continue
+            
+            if char == '\\':
+                escape_next = True
+                continue
+            
+            if char == '"' and not escape_next:
+                in_string = not in_string
+                continue
+            
+            if in_string:
+                continue
+            
+            if char == '{':
+                depth += 1
+            elif char == '}':
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        
+        if end == -1:
+            return None
+        
+        json_str = content[start:end]
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError as e:
+            logger.debug(f"JSON 추출 실패: {e}, 내용: {json_str[:200]}")
+            return None
+
     def analyze_one(self, news: RawNews) -> ProcessedNews | None:
-        """단일 뉴스 분석 (rate limit 대응)."""
+        """단일 뉴스 분석."""
         system_prompt = self._extract_system_prompt()
         user_prompt = self._build_user_prompt(news)
 
@@ -73,10 +139,16 @@ class ClaudeNewsProcessor:
                 )
                 content = response.content[0].text
 
-                content = re.sub(r"^```(?:json)?\s*", "", content.strip())
-                content = re.sub(r"\s*```$", "", content)
-
-                data = json.loads(content)
+                data = self._extract_json(content)
+                if data is None:
+                    if attempt < max_retries - 1:
+                        logger.warning(
+                            f"JSON 추출 실패 (attempt {attempt + 1}/{max_retries}), 재시도..."
+                        )
+                        time.sleep(1)
+                        continue
+                    logger.warning(f"JSON 추출 최종 실패: {news.title[:40]}")
+                    return None
 
                 processed = ProcessedNews(
                     raw=news,
@@ -101,14 +173,6 @@ class ClaudeNewsProcessor:
                 time.sleep(wait_time)
                 continue
 
-            except json.JSONDecodeError as e:
-                logger.warning(
-                    f"JSON 파싱 실패 (attempt {attempt + 1}/{max_retries}): {e}"
-                )
-                if attempt < max_retries - 1:
-                    time.sleep(1)
-                continue
-
             except Exception as e:
                 logger.error(f"Claude API 에러: {e}")
                 if attempt < max_retries - 1:
@@ -130,8 +194,7 @@ class ClaudeNewsProcessor:
         
         if len(news_list) > self.max_news_for_analysis:
             logger.info(
-                f"사전 필터링: {len(news_list)}건 → {self.max_news_for_analysis}건 "
-                f"(키워드 매칭 수 + 최신순 우선)"
+                f"사전 필터링: {len(news_list)}건 → {self.max_news_for_analysis}건"
             )
         
         return limited
