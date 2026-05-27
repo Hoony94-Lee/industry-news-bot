@@ -50,14 +50,20 @@ class TelegramSender:
             date_str = date_str.replace(en, kr)
 
         if mode == "morning":
-            title = f"🌅 *{date_str} 아침 산업 인텔리전스*"
+            title = f"🌅 <b>{date_str} 아침 산업 인텔리전스</b>"
         else:
-            title = f"🌆 *{date_str} 장 마감 산업 인텔리전스*"
+            title = f"🌆 <b>{date_str} 장 마감 산업 인텔리전스</b>"
 
         return f"{title}\n━━━━━━━━━━━━━━━━━━━━"
 
     def build_news_block(self, news: ProcessedNews) -> str:
-        """단일 뉴스 블록."""
+        """단일 뉴스 블록.
+        
+        포맷 (HTML 모드):
+        🔥 <b>제목 볼드</b>
+        - 요약: 요약 내용
+        🔗 https://...
+        """
         if news.importance >= 5:
             star = "🔥 "
         elif news.importance >= 4:
@@ -67,34 +73,18 @@ class TelegramSender:
 
         lines = []
 
-        # 1. 제목 (볼드)
+        # 1. 제목 (HTML 볼드 태그)
         headline = truncate(news.headline, 80)
-        lines.append(f"{star}*{self._escape_md(headline)}*")
+        lines.append(f"{star}<b>{self._escape_html(headline)}</b>")
 
         # 2. 요약
         summary = news.meaning or news.core
         summary_short = truncate(summary, 100)
-        lines.append(f"\\- 요약: {self._escape_md(summary_short)}")
+        lines.append(f"- 요약: {self._escape_html(summary_short)}")
 
-        # 3. 수혜주
-        if news.matched_company_pages:
-            company_strs = []
-            for c in news.matched_company_pages[:3]:
-                name = self._escape_md(c["name"])
-                ticker = c.get("ticker", "")
-                ir_badge = "💼" if c.get("has_ir_note") else ""
-                if ticker:
-                    company_strs.append(f"{name}\\({ticker}\\){ir_badge}")
-                else:
-                    company_strs.append(f"{name}{ir_badge}")
-            companies_str = ", ".join(company_strs)
-            lines.append(f"\\- 수혜주: {companies_str}")
-        else:
-            lines.append(f"\\- 수혜주: \\-")
-
-        # 4. 링크 (이모티콘 + URL)
+        # 3. 링크 (수혜주 제거)
         url = news.raw.url
-        lines.append(f"🔗 {self._escape_url(url)}")
+        lines.append(f"🔗 {url}")
 
         return "\n".join(lines)
 
@@ -105,41 +95,28 @@ class TelegramSender:
     ) -> str:
         """카테고리 섹션."""
         emoji = CATEGORY_EMOJI.get(category, "📌")
-        header = f"\n{emoji} *{category}*"
+        header = f"\n{emoji} <b>{category}</b>"
 
         blocks = [self.build_news_block(news) for news in news_list]
         return header + "\n\n" + "\n\n".join(blocks)
 
     @staticmethod
-    def _escape_md(text: str) -> str:
-        """Telegram MarkdownV2 이스케이프."""
+    def _escape_html(text: str) -> str:
+        """Telegram HTML 모드 이스케이프.
+        
+        HTML 파싱 모드에서는 <, >, & 만 이스케이프하면 됨.
+        MarkdownV2보다 훨씬 단순하고 안정적.
+        """
         if not text:
             return ""
-        special_chars = r"_*[]()~`>#+-=|{}.!"
-        result = []
-        for char in text:
-            if char in special_chars:
-                result.append(f"\\{char}")
-            else:
-                result.append(char)
-        return "".join(result)
-
-    @staticmethod
-    def _escape_url(url: str) -> str:
-        """URL용 이스케이프."""
-        if not url:
-            return ""
-        result = []
-        special_chars = r"_*[]()~`>#+-=|{}.!"
-        for char in url:
-            if char in special_chars:
-                result.append(f"\\{char}")
-            else:
-                result.append(char)
-        return "".join(result)
+        return (
+            text.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
 
     async def _send_async(self, text: str) -> bool:
-        """비동기 메시지 발송."""
+        """비동기 메시지 발송 (HTML 모드)."""
         if is_debug_mode():
             logger.info("=" * 60)
             logger.info("🔍 DEBUG MODE - 텔레그램 미발송, 내용 출력:")
@@ -152,14 +129,14 @@ class TelegramSender:
             await self.bot.send_message(
                 chat_id=self.chat_id,
                 text=text,
-                parse_mode=ParseMode.MARKDOWN_V2,
+                parse_mode=ParseMode.HTML,
                 disable_web_page_preview=True,
             )
             return True
         except TelegramError as e:
             logger.error(f"텔레그램 발송 실패: {e}")
             try:
-                plain_text = self._strip_markdown(text)
+                plain_text = self._strip_html(text)
                 await self.bot.send_message(
                     chat_id=self.chat_id,
                     text=plain_text,
@@ -172,12 +149,15 @@ class TelegramSender:
                 return False
 
     @staticmethod
-    def _strip_markdown(text: str) -> str:
-        """마크다운 이스케이프 제거."""
+    def _strip_html(text: str) -> str:
+        """HTML 태그 제거 (폴백용)."""
         import re
-        text = re.sub(r"\\([_*\[\]()~`>#+\-=|{}.!])", r"\1", text)
-        text = re.sub(r"\*([^*]+)\*", r"\1", text)
-        text = re.sub(r"`([^`]+)`", r"\1", text)
+        text = re.sub(r"<[^>]+>", "", text)
+        text = (
+            text.replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+        )
         return text
 
     def _split_long_message(self, text: str) -> list[str]:
