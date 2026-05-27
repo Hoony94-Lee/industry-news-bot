@@ -60,11 +60,10 @@ class TelegramSender:
         """단일 뉴스 블록.
         
         포맷:
-        제목내용 (별표/이모티콘 없이)
+        🔥 *제목* (볼드)
         - 요약: 요약 내용
         - 수혜주: 종목명(티커)
-        - 링크:
-        https://www.example.com/...
+        🔗 https://www.example.com/...
         """
         if news.importance >= 5:
             star = "🔥 "
@@ -75,7 +74,7 @@ class TelegramSender:
 
         lines = []
         
-        # 1. 제목 (별표만, "제목" 텍스트 없이)
+        # 1. 제목 (볼드)
         headline = truncate(news.headline, 80)
         lines.append(f"{star}*{self._escape_md(headline)}*")
 
@@ -100,10 +99,9 @@ class TelegramSender:
         else:
             lines.append(f"\\- 수혜주: \\-")
 
-        # 4. 링크 (원문만, 괄호 없이 줄바꿈으로 표시)
+        # 4. 링크 (🔗 이모티콘 + URL 바로)
         url = news.raw.url
-        lines.append(f"\\- 링크:")
-        lines.append(self._escape_url(url))
+        lines.append(f"🔗 {self._escape_url(url)}")
 
         return "\n".join(lines)
 
@@ -135,10 +133,9 @@ class TelegramSender:
 
     @staticmethod
     def _escape_url(url: str) -> str:
-        """URL용 이스케이프 (괄호와 점만)."""
+        """URL용 이스케이프."""
         if not url:
             return ""
-        # URL에서 MarkdownV2가 문제삼는 문자만 이스케이프
         result = []
         special_chars = r"_*[]()~`>#+-=|{}.!"
         for char in url:
@@ -172,92 +169,3 @@ class TelegramSender:
                 plain_text = self._strip_markdown(text)
                 await self.bot.send_message(
                     chat_id=self.chat_id,
-                    text=plain_text,
-                    disable_web_page_preview=True,
-                )
-                logger.info("Plain text로 재발송 성공")
-                return True
-            except Exception as e2:
-                logger.error(f"Plain text 재발송도 실패: {e2}")
-                return False
-
-    @staticmethod
-    def _strip_markdown(text: str) -> str:
-        """마크다운 이스케이프 제거."""
-        import re
-        text = re.sub(r"\\([_*\[\]()~`>#+\-=|{}.!])", r"\1", text)
-        text = re.sub(r"\*([^*]+)\*", r"\1", text)
-        text = re.sub(r"`([^`]+)`", r"\1", text)
-        return text
-
-    def _split_long_message(self, text: str) -> list[str]:
-        """긴 메시지를 여러 개로 분할."""
-        if len(text) <= MAX_MESSAGE_LENGTH:
-            return [text]
-
-        chunks: list[str] = []
-        current = ""
-        for line in text.split("\n"):
-            if len(current) + len(line) + 1 > MAX_MESSAGE_LENGTH:
-                chunks.append(current)
-                current = line
-            else:
-                current = current + "\n" + line if current else line
-        if current:
-            chunks.append(current)
-        return chunks
-
-    async def send_news_digest(
-        self,
-        processed_list: list[ProcessedNews],
-        mode: Literal["morning", "evening"] = "morning",
-    ) -> bool:
-        """전체 뉴스 다이제스트 발송."""
-        if not processed_list:
-            logger.warning("발송할 뉴스가 없습니다.")
-            return False
-
-        by_category: dict[str, list[ProcessedNews]] = {}
-        for news in processed_list:
-            by_category.setdefault(news.category, []).append(news)
-
-        category_order = ["AI/데이터센터", "반도체", "2차전지", "로봇"]
-
-        sections = [self.build_header(mode)]
-        for cat in category_order:
-            if cat in by_category:
-                items = by_category[cat]
-                items.sort(key=lambda x: x.importance, reverse=True)
-                sections.append(self.build_category_section(cat, items))
-
-        for cat, items in by_category.items():
-            if cat not in category_order:
-                items.sort(key=lambda x: x.importance, reverse=True)
-                sections.append(self.build_category_section(cat, items))
-
-        # 푸터 제거: 더이상 "총 X건" 안 보냄
-
-        full_message = "\n".join(sections)
-
-        chunks = self._split_long_message(full_message)
-        logger.info(f"텔레그램 발송: {len(chunks)}개 메시지")
-
-        success = True
-        for i, chunk in enumerate(chunks, 1):
-            result = await self._send_async(chunk)
-            if not result:
-                success = False
-            if i < len(chunks):
-                time.sleep(1)
-
-        if success:
-            logger.info("✅ 텔레그램 발송 완료")
-        return success
-
-    def send_digest(
-        self,
-        processed_list: list[ProcessedNews],
-        mode: Literal["morning", "evening"] = "morning",
-    ) -> bool:
-        """동기 wrapper."""
-        return asyncio.run(self.send_news_digest(processed_list, mode))
