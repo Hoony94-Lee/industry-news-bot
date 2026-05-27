@@ -1,22 +1,21 @@
 # Notion DB ID 매핑
-# 새 DB 생성 시 여기에 추가
 
 databases:
   news_archive:
     name: News Archive
-    id: "07098c1a-e0b8-4208-97ca-116a872b1d0c"
+    id: "90faeec5-c8a7-41ff-9260-fc04e339e2c4"
     
   industry_tracker:
     name: Industry Tracker
-    id: "7127f2c0-23f9-41cc-9ec3-2bb90be3843e"
+    id: "bbc59bec-4f7b-4de5-836b-20fe42a1d36e"
     
   company_master:
     name: 상장사 마스터
-    id: "cabbbb13-34d8-44b6-a710-c3f7ac41ed7c"
+    id: "934f02f7-08a4-454f-9fa4-68bfe8f9a6e2"
     
   ir_meeting_notes:
     name: 기업 탐방노트
-    id: "b38b3f96-dd8d-48e1-9e6b-d60037fb6b7c"
+    id: "d802a99a-d6cf-4d2c-ab48-a62b88639917"
 
 # News Archive DB의 properties 매핑
 news_archive_properties:
