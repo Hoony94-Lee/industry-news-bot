@@ -72,19 +72,14 @@ sources:
 
 # RSS 수집 설정
 rss_settings:
-  # 각 RSS에서 최대 가져올 항목 수
-  max_items_per_feed: 30
+  # 30 → 15로 줄임
+  max_items_per_feed: 15
   
-  # User-Agent (일부 사이트는 봇 차단)
   user_agent: "Mozilla/5.0 (compatible; IndustryNewsBot/1.0)"
-  
-  # 타임아웃 (초)
   timeout: 15
 
 # 네이버 API 설정
 naver_settings:
-  # 키워드당 가져올 결과 수 (최대 100)
-  display: 30
-  
-  # 정렬 (sim=정확도, date=최신순)
+  # 30 → 10으로 줄임
+  display: 10
   sort: date
