@@ -135,7 +135,7 @@ filter:
   max_age_hours: 24
   similarity_threshold: 75
   min_importance: 3
-  max_per_category: 5
-  max_news_for_analysis: 80
+  max_per_category: 2          # 5 → 2
+  max_news_for_analysis: 40    # 80 → 40
   claude_max_workers: 2
-  claude_request_delay: 1.0
+  claude_request_delay: 1.5
