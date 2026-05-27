@@ -20,7 +20,8 @@ from .utils import (
 )
 
 
-CLAUDE_MODEL = "claude-sonnet-4-5-20250929"
+# Haiku 4.5 - 빠르고 저렴
+CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 
 
 class ClaudeNewsProcessor:
@@ -33,14 +34,14 @@ class ClaudeNewsProcessor:
         
         config = load_yaml_config("keywords.yml")["filter"]
         self.min_importance = config["min_importance"]
-        self.max_news_for_analysis = config.get("max_news_for_analysis", 80)
+        self.max_news_for_analysis = config.get("max_news_for_analysis", 40)
         self.max_workers = config.get("claude_max_workers", 2)
-        self.request_delay = config.get("claude_request_delay", 1.0)
+        self.request_delay = config.get("claude_request_delay", 1.5)
 
     def _build_user_prompt(self, news: RawNews) -> str:
         return self.prompt_template.format(
             title=news.title,
-            summary=news.summary[:1000],
+            summary=news.summary[:800],
             source=news.source,
             pub_date=news.pub_date.strftime("%Y-%m-%d %H:%M"),
             url=news.url,
@@ -61,12 +62,12 @@ class ClaudeNewsProcessor:
         system_prompt = self._extract_system_prompt()
         user_prompt = self._build_user_prompt(news)
 
-        max_retries = 5
+        max_retries = 2
         for attempt in range(max_retries):
             try:
                 response = self.client.messages.create(
                     model=CLAUDE_MODEL,
-                    max_tokens=1500,
+                    max_tokens=800,
                     system=system_prompt,
                     messages=[{"role": "user", "content": user_prompt}],
                 )
@@ -92,7 +93,7 @@ class ClaudeNewsProcessor:
                 return processed
 
             except RateLimitError as e:
-                wait_time = 30 + (attempt * 15)
+                wait_time = 30
                 logger.warning(
                     f"Rate limit 발생 (attempt {attempt + 1}/{max_retries}), "
                     f"{wait_time}초 대기..."
@@ -108,19 +109,13 @@ class ClaudeNewsProcessor:
                     time.sleep(1)
                 continue
 
-            except APIError as e:
-                logger.error(f"Claude API 에러 (attempt {attempt + 1}): {e}")
-                if attempt < max_retries - 1:
-                    time.sleep(2 ** attempt)
-                continue
-
             except Exception as e:
-                logger.error(f"예상치 못한 에러: {e}")
+                logger.error(f"Claude API 에러: {e}")
                 if attempt < max_retries - 1:
-                    time.sleep(2 ** attempt)
+                    time.sleep(2)
                 continue
 
-        logger.error(f"뉴스 분석 실패 (최대 재시도 초과): {news.title[:50]}")
+        logger.error(f"뉴스 분석 실패: {news.title[:50]}")
         return None
 
     def _prefilter_news(self, news_list: list[RawNews]) -> list[RawNews]:
@@ -155,7 +150,7 @@ class ClaudeNewsProcessor:
 
         logger.info(
             f"Claude 분석 시작: {len(news_list)}건 "
-            f"(병렬 {workers}, 요청 간격 {self.request_delay}초)"
+            f"(병렬 {workers}, 요청 간격 {self.request_delay}초, 모델 Haiku)"
         )
         processed_list: list[ProcessedNews] = []
 
@@ -185,7 +180,7 @@ class ClaudeNewsProcessor:
 
 def filter_by_category_limit(
     processed_list: list[ProcessedNews],
-    max_per_category: int = 5,
+    max_per_category: int = 2,
 ) -> list[ProcessedNews]:
     """카테고리당 최대 N건으로 제한."""
     by_category: dict[str, list[ProcessedNews]] = {}
