@@ -114,28 +114,45 @@ categories:
         search_queries:
           - "휴머노이드 로봇"
           - "옵티머스"
+          - "피규어 AI"
+          - "유니트리"
+          - "보스턴다이내믹스"
+          - "AI 로봇"
         english_queries:
           - "humanoid robot"
+          - "Optimus robot"
+          - "Figure AI"
+          - "Unitree"
 
       협동로봇:
         search_queries:
           - "협동로봇"
+          - "코봇"
+          - "두산로보틱스"
+          - "레인보우로보틱스"
         english_queries:
           - "collaborative robot"
+          - "cobot"
 
       로봇 부품:
         search_queries:
           - "로봇 감속기"
           - "하모닉 드라이브"
+          - "로봇 액추에이터"
+          - "로봇 비전"
+          - "로봇 그리퍼"
+          - "로봇 센서"
         english_queries:
           - "robot reducer"
+          - "robot actuator"
+          - "robot gripper"
 
 # 필터링 설정
 filter:
   max_age_hours: 24
   similarity_threshold: 75
   min_importance: 3
-  max_per_category: 2          # 5 → 2
+  max_per_category: 3          # 2 → 3
   max_news_for_analysis: 40    # 80 → 40
   claude_max_workers: 2
   claude_request_delay: 1.5
