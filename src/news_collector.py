@@ -47,19 +47,10 @@ class NaverNewsCollector:
     def search(
         self,
         query: str,
-        display: int = 30,
+        display: int = 10,
         sort: str = "date",
     ) -> list[dict[str, Any]]:
-        """단일 키워드 검색.
-
-        Args:
-            query: 검색어
-            display: 결과 수 (최대 100)
-            sort: date(최신순) / sim(정확도)
-
-        Returns:
-            네이버 API 응답의 items 리스트
-        """
+        """단일 키워드 검색."""
         params = {
             "query": query,
             "display": min(display, 100),
@@ -108,51 +99,38 @@ class NaverNewsCollector:
         """URL에서 매체명 추정."""
         if not url:
             return "Unknown"
-        # 간단 매핑
         domain_map = {
             "etnews.com": "전자신문",
             "thelec.kr": "디일렉",
             "hankyung.com": "한국경제",
             "mk.co.kr": "매일경제",
-            "chosun.com": "조선일보",
-            "joongang.co.kr": "중앙일보",
-            "donga.com": "동아일보",
             "sedaily.com": "서울경제",
             "edaily.co.kr": "이데일리",
-            "newsis.com": "뉴시스",
-            "yna.co.kr": "연합뉴스",
-            "ytn.co.kr": "YTN",
-            "mbn.co.kr": "MBN",
-            "money.daum.net": "다음 머니",
-            "moneys.co.kr": "머니S",
-            "businesspost.co.kr": "비즈니스포스트",
-            "biz.heraldcorp.com": "헤럴드경제",
-            "asiae.co.kr": "아시아경제",
             "fnnews.com": "파이낸셜뉴스",
+            "mt.co.kr": "머니투데이",
+            "heraldcorp.com": "헤럴드경제",
+            "asiae.co.kr": "아시아경제",
             "zdnet.co.kr": "ZDNet Korea",
-            "ddaily.co.kr": "디지털데일리",
-            "etoday.co.kr": "이투데이",
-            "skhynix.co.kr": "SK하이닉스 뉴스룸",
+            "dt.co.kr": "디지털타임즈",
+            "semianalysis.com": "SemiAnalysis",
+            "reuters.com": "Reuters",
+            "bloomberg.com": "Bloomberg",
+            "wsj.com": "WSJ",
+            "ft.com": "Financial Times",
+            "nikkei.com": "Nikkei",
+            "asia.nikkei.com": "Nikkei Asia",
         }
         for domain, name in domain_map.items():
             if domain in url:
                 return name
-        return "Naver News"
+        return "Other"
 
     def collect_by_keywords(
         self,
         keywords_config: dict[str, Any],
         max_age_hours: int = 24,
     ) -> list[RawNews]:
-        """모든 키워드에 대해 네이버 뉴스 수집.
-
-        Args:
-            keywords_config: keywords.yml의 categories 구조
-            max_age_hours: N시간 이내 뉴스만
-
-        Returns:
-            수집된 RawNews 리스트
-        """
+        """모든 키워드에 대해 네이버 뉴스 수집."""
         collected: list[RawNews] = []
         display = load_yaml_config("rss_sources.yml")["naver_settings"]["display"]
 
@@ -163,11 +141,8 @@ class NaverNewsCollector:
                     items = self.search(query, display=display)
                     for item in items:
                         news = self.to_raw_news(item, keyword_name)
-                        # 24시간 이내만
                         if is_recent(news.pub_date, hours=max_age_hours):
                             collected.append(news)
-
-                    # API rate limit 보호
                     time.sleep(0.1)
 
         logger.info(f"네이버 뉴스 수집 완료: {len(collected)}건")
@@ -190,7 +165,6 @@ class RSSCollector:
     def parse_feed(self, url: str, source_name: str, language: str) -> list[RawNews]:
         """단일 RSS 피드 파싱."""
         try:
-            # User-Agent 설정 (일부 사이트는 봇 차단)
             headers = {"User-Agent": self.user_agent}
             response = requests.get(url, headers=headers, timeout=self.timeout)
             response.raise_for_status()
@@ -210,7 +184,7 @@ class RSSCollector:
                             entry.get("summary", "") or entry.get("description", "")
                         ),
                         language=language,
-                        matched_keywords=[],  # RSS는 키워드 매칭 후처리
+                        matched_keywords=[],
                     )
                     if news.title and news.url:
                         news_list.append(news)
@@ -225,7 +199,6 @@ class RSSCollector:
 
     def _parse_entry_date(self, entry: Any) -> datetime:
         """RSS entry의 발행일 파싱."""
-        # feedparser는 published_parsed (time.struct_time)를 제공
         if hasattr(entry, "published_parsed") and entry.published_parsed:
             dt = datetime(*entry.published_parsed[:6])
             return pytz.utc.localize(dt).astimezone(KST)
@@ -254,7 +227,6 @@ class RSSCollector:
             logger.info(f"RSS 수집 중: {name} ({url})")
             news_list = self.parse_feed(url, name, language)
 
-            # 24시간 이내만
             recent_news = [n for n in news_list if is_recent(n.pub_date, hours=max_age_hours)]
             collected.extend(recent_news)
             logger.info(f"  → {len(recent_news)}건 수집 (전체 {len(news_list)}건 중)")
@@ -271,15 +243,10 @@ def match_keywords_to_news(
     news_list: list[RawNews],
     keywords_config: dict[str, Any],
 ) -> list[RawNews]:
-    """RSS로 수집된 뉴스에 키워드 매칭.
-
-    제목 + 요약에서 키워드 검색하여 matched_keywords 채움.
-    매칭 안 되는 뉴스는 제외.
-    """
+    """RSS로 수집된 뉴스에 키워드 매칭."""
     matched: list[RawNews] = []
 
-    # 모든 검색어를 평탄화
-    all_search_terms: dict[str, list[str]] = {}  # {keyword_name: [search_terms]}
+    all_search_terms: dict[str, list[str]] = {}
     for category_data in keywords_config["categories"].values():
         for keyword_name, keyword_data in category_data["keywords"].items():
             terms = []
@@ -288,7 +255,6 @@ def match_keywords_to_news(
             all_search_terms[keyword_name] = terms
 
     for news in news_list:
-        # 제목 + 요약을 한 문자열로
         haystack = (news.title + " " + news.summary).lower()
         matched_kws = []
 
@@ -307,23 +273,70 @@ def match_keywords_to_news(
 
 
 # ============================================================
+# 화이트리스트 + 블랙리스트 필터링
+# ============================================================
+
+def filter_by_whitelist_and_blacklist(news_list: list[RawNews]) -> list[RawNews]:
+    """화이트리스트(허용 도메인) + 블랙리스트(제외 키워드) 필터링."""
+    rss_config = load_yaml_config("rss_sources.yml")
+    
+    # 화이트리스트
+    whitelist_cfg = rss_config.get("source_whitelist", {})
+    whitelist_enabled = whitelist_cfg.get("enabled", False)
+    allowed_domains = whitelist_cfg.get("domains", [])
+    
+    # 블랙리스트 키워드
+    blacklist_cfg = rss_config.get("source_blacklist", {})
+    blocked_keywords = blacklist_cfg.get("keywords_in_title", [])
+    
+    filtered: list[RawNews] = []
+    removed_by_whitelist = 0
+    removed_by_keyword = 0
+    
+    for news in news_list:
+        url_lower = news.url.lower()
+        
+        # 1) 화이트리스트 체크
+        if whitelist_enabled and allowed_domains:
+            if not any(domain in url_lower for domain in allowed_domains):
+                removed_by_whitelist += 1
+                continue
+        
+        # 2) 제목 키워드 블랙리스트 체크
+        title_lower = news.title.lower()
+        if any(kw.lower() in title_lower for kw in blocked_keywords):
+            removed_by_keyword += 1
+            continue
+        
+        filtered.append(news)
+    
+    if removed_by_whitelist or removed_by_keyword:
+        logger.info(
+            f"필터링: 화이트리스트 외 {removed_by_whitelist}건, "
+            f"키워드 제외 {removed_by_keyword}건 → {len(filtered)}건 남음"
+        )
+    
+    return filtered
+
+
+# ============================================================
 # 통합 수집기
 # ============================================================
 
 def collect_all_news() -> list[RawNews]:
-    """전체 뉴스 수집 + 중복 제거."""
+    """전체 뉴스 수집 + 중복 제거 + 필터링."""
     keywords_config = load_yaml_config("keywords.yml")
     max_age = keywords_config["filter"]["max_age_hours"]
     similarity = keywords_config["filter"]["similarity_threshold"]
 
-    # 1. 네이버 뉴스 수집 (이미 키워드 매칭됨)
+    # 1. 네이버 뉴스 수집
     logger.info("=" * 60)
     logger.info("📡 네이버 뉴스 수집 시작")
     logger.info("=" * 60)
     naver = NaverNewsCollector()
     naver_news = naver.collect_by_keywords(keywords_config, max_age_hours=max_age)
 
-    # 2. RSS 수집 (키워드 매칭 필요)
+    # 2. RSS 수집
     logger.info("=" * 60)
     logger.info("📡 RSS 수집 시작")
     logger.info("=" * 60)
@@ -336,4 +349,8 @@ def collect_all_news() -> list[RawNews]:
     logger.info(f"통합 전: {len(all_news)}건 (네이버 {len(naver_news)}, RSS {len(rss_news)})")
 
     deduplicated = deduplicate_news(all_news, similarity_threshold=similarity)
-    return deduplicated
+    
+    # 4. 화이트리스트 + 블랙리스트 필터 적용
+    final = filter_by_whitelist_and_blacklist(deduplicated)
+    
+    return final
