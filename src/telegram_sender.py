@@ -77,16 +77,50 @@ class TelegramSender:
         headline = truncate(news.headline, 80)
         lines.append(f"{star}<b>{self._escape_html(headline)}</b>")
 
-        # 2. 요약
+        # 2. 요약 (자연스러운 문장 단위로 자르기)
         summary = news.meaning or news.core
-        summary_short = truncate(summary, 100)
+        summary_short = self._smart_truncate(summary, 180)
         lines.append(f"- 요약: {self._escape_html(summary_short)}")
 
-        # 3. 링크 (수혜주 제거)
+        # 3. 링크
         url = news.raw.url
         lines.append(f"🔗 {url}")
 
         return "\n".join(lines)
+
+    @staticmethod
+    def _smart_truncate(text: str, max_len: int = 180) -> str:
+        """문장 단위로 자연스럽게 자르기.
+        
+        max_len 이내에서 마침표('.'), 한국어 종결('다', '음', '함') 뒤에서 자름.
+        못 찾으면 그냥 max_len에서 자르고 "..." 추가.
+        """
+        if not text:
+            return ""
+        if len(text) <= max_len:
+            return text
+        
+        # max_len 위치까지의 부분 문자열
+        candidate = text[:max_len]
+        
+        # 문장 끝나는 위치 찾기 (뒤에서부터)
+        # 한국어 종결: '다.', '음.', '함.', '됨.', '됨', '다', '음', '함'
+        # 영문/기호: '.', '!', '?'
+        sentence_endings = ['. ', '다. ', '음. ', '함. ', '됨. ', '다.', '음.', '함.', '됨.']
+        
+        best_pos = -1
+        for ending in sentence_endings:
+            pos = candidate.rfind(ending)
+            if pos > max_len * 0.5:  # 절반 이상은 유지
+                end_pos = pos + len(ending)
+                if end_pos > best_pos:
+                    best_pos = end_pos
+        
+        if best_pos > 0:
+            return text[:best_pos].rstrip()
+        
+        # 문장 끝을 못 찾으면 그냥 자르기
+        return candidate.rstrip() + "..."
 
     def build_category_section(
         self,
