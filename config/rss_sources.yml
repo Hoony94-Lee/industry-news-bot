@@ -1,31 +1,30 @@
-# RSS 소스 목록
+# RSS 소스 목록 (화이트리스트 방식)
 
 sources:
-  # === 한글 소스 ===
+  # === 한글 전문 IT/반도체 매체 ===
   
   electronic_times:
     name: 전자신문
     url: https://rss.etnews.com/Section902.xml
     language: ko
     enabled: true
-    weight: 1.0
-    description: 반도체/IT 전문
+    weight: 1.3
 
   thelec:
     name: 디일렉
     url: https://cdn.thelec.kr/rss/gn_rss_allArticle.xml
     language: ko
     enabled: true
-    weight: 1.2
-    description: 반도체/디스플레이 전문
+    weight: 1.3
+
+  # === 한글 경제 일간지 ===
 
   hankyung_all:
-    name: 한국경제 전체
+    name: 한국경제
     url: https://www.hankyung.com/feed/all-news
     language: ko
     enabled: true
     weight: 1.0
-    description: 한국경제 전체뉴스 (카테고리 통합)
 
   mk_it:
     name: 매일경제 IT/과학
@@ -33,7 +32,6 @@ sources:
     language: ko
     enabled: true
     weight: 1.0
-    description: 매경 IT/과학
 
   mk_economy:
     name: 매일경제 경제
@@ -41,9 +39,8 @@ sources:
     language: ko
     enabled: true
     weight: 1.0
-    description: 매경 경제
 
-  # === 영문 소스 (Google News로 대체) ===
+  # === 영문 매체 ===
 
   google_news_semiconductor:
     name: Google News - Semiconductor
@@ -51,7 +48,6 @@ sources:
     language: en
     enabled: true
     weight: 1.0
-    description: Google News 반도체/엔비디아 검색
 
   google_news_ai_datacenter:
     name: Google News - AI Data Center
@@ -59,7 +55,6 @@ sources:
     language: en
     enabled: true
     weight: 1.0
-    description: Google News AI 데이터센터 검색
 
   semianalysis:
     name: SemiAnalysis
@@ -67,7 +62,82 @@ sources:
     language: en
     enabled: true
     weight: 1.3
-    description: 반도체 심층 분석
+
+# 화이트리스트: 이 도메인의 뉴스만 허용
+source_whitelist:
+  enabled: true
+  domains:
+    # === 한글 경제 일간지 (8) ===
+    - "mk.co.kr"              # 매일경제
+    - "hankyung.com"          # 한국경제
+    - "sedaily.com"           # 서울경제
+    - "mt.co.kr"              # 머니투데이
+    - "news.mt.co.kr"         # 머니투데이 (서브)
+    - "fnnews.com"            # 파이낸셜뉴스
+    - "edaily.co.kr"          # 이데일리
+    - "heraldcorp.com"        # 헤럴드경제
+    - "biz.heraldcorp.com"    # 헤럴드경제 (비즈)
+    - "news.heraldcorp.com"   # 헤럴드경제 (뉴스)
+    - "asiae.co.kr"           # 아시아경제
+    - "view.asiae.co.kr"      # 아시아경제 (뷰)
+    
+    # === 한글 전문지 (4) ===
+    - "etnews.com"            # 전자신문
+    - "thelec.kr"             # 디일렉
+    - "dt.co.kr"              # 디지털타임즈
+    - "zdnet.co.kr"           # ZDNet Korea
+    
+    # === 영문 매체 ===
+    - "semianalysis.com"      # SemiAnalysis
+    - "reuters.com"           # Reuters
+    - "bloomberg.com"         # Bloomberg
+    - "wsj.com"               # Wall Street Journal
+    - "ft.com"                # Financial Times
+    - "nikkei.com"            # Nikkei
+    - "asia.nikkei.com"       # Nikkei Asia
+    - "theinformation.com"    # The Information
+    - "tomshardware.com"      # Tom's Hardware
+    - "anandtech.com"         # AnandTech
+    - "extremetech.com"       # ExtremeTech
+    - "techcrunch.com"        # TechCrunch
+    - "theregister.com"       # The Register
+    - "arstechnica.com"       # Ars Technica
+    - "datacenterdynamics.com" # Data Center Dynamics
+    - "datacenterknowledge.com" # Data Center Knowledge
+
+# 매체 블랙리스트 (이중 안전장치, 제목 키워드)
+source_blacklist:
+  keywords_in_title:
+    # 단기 트레이딩성 콘텐츠
+    - "특징주"
+    - "급등주"
+    - "급락주"
+    - "오늘의 증시"
+    - "오늘의 주식"
+    - "장 마감"
+    - "장 시작"
+    - "오전 시황"
+    - "오후 시황"
+    - "코스피 마감"
+    - "코스닥 마감"
+    - "美 증시"
+    - "미 증시"
+    - "뉴욕증시"
+    - "테마주"
+    - "관련주"
+    - "랭킹"
+    - "신고가"
+    - "52주"
+    - "급등"
+    - "급락"
+    - "상한가"
+    - "하한가"
+    # 영문 트레이딩성
+    - "stocks to watch"
+    - "stock alert"
+    - "market close"
+    - "market open"
+    - "premarket"
 
 # RSS 수집 설정
 rss_settings:
