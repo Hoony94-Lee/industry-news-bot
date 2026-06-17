@@ -1,5 +1,4 @@
-# 4개 카테고리 × 17개 핵심 키워드 정의
-
+# 5개 카테고리 × 24개 핵심 키워드 정의
 categories:
   반도체:
     color: blue
@@ -10,14 +9,12 @@ categories:
           - "엔비디아 실적"
         english_queries:
           - "NVIDIA GPU"
-
       베라 루빈:
         search_queries:
           - "베라 루빈"
           - "Vera Rubin"
         english_queries:
           - "Vera Rubin NVIDIA"
-
       SO-CAMM:
         search_queries:
           - "SOCAMM"
@@ -25,7 +22,6 @@ categories:
           - "소캠"
         english_queries:
           - "SOCAMM"
-
       CPO:
         search_queries:
           - "광반도체"
@@ -33,7 +29,6 @@ categories:
           - "Co-Packaged Optics"
         english_queries:
           - "Co-Packaged Optics"
-
       DRAM:
         search_queries:
           - "HBM4"
@@ -41,20 +36,17 @@ categories:
           - "디램 가격"
         english_queries:
           - "HBM4"
-
       NAND:
         search_queries:
           - "낸드 플래시"
           - "NAND 가격"
         english_queries:
           - "NAND flash market"
-
       프로브카드:
         search_queries:
           - "프로브카드"
         english_queries:
           - "probe card"
-
   AI/데이터센터:
     color: orange
     keywords:
@@ -64,21 +56,18 @@ categories:
           - "하이퍼스케일러 투자"
         english_queries:
           - "hyperscaler CapEx"
-
       데이터센터 냉각:
         search_queries:
           - "데이터센터 냉각"
           - "액체냉각"
         english_queries:
           - "data center liquid cooling"
-
       전력/송배전:
         search_queries:
           - "데이터센터 전력"
           - "AI 전력 수요"
         english_queries:
           - "AI data center power"
-
   2차전지:
     color: green
     keywords:
@@ -87,26 +76,22 @@ categories:
           - "전고체 배터리"
         english_queries:
           - "solid-state battery"
-
       LFP:
         search_queries:
           - "LFP 배터리"
           - "리튬인산철"
         english_queries:
           - "LFP battery"
-
       건식전극:
         search_queries:
           - "건식전극"
         english_queries:
           - "dry electrode battery"
-
       실리콘 음극재:
         search_queries:
           - "실리콘 음극재"
         english_queries:
           - "silicon anode"
-
   로봇:
     color: purple
     keywords:
@@ -123,7 +108,6 @@ categories:
           - "Optimus robot"
           - "Figure AI"
           - "Unitree"
-
       협동로봇:
         search_queries:
           - "협동로봇"
@@ -133,7 +117,6 @@ categories:
         english_queries:
           - "collaborative robot"
           - "cobot"
-
       로봇 부품:
         search_queries:
           - "로봇 감속기"
@@ -146,7 +129,65 @@ categories:
           - "robot reducer"
           - "robot actuator"
           - "robot gripper"
-
+  거시:
+    color: gray
+    keywords:
+      통화정책_금리:
+        search_queries:
+          - "FOMC 금리"
+          - "연준 금리"
+          - "한국은행 기준금리"
+          - "금리 인하"
+        english_queries:
+          - "Fed rate decision"
+          - "FOMC"
+      환율_외환:
+        search_queries:
+          - "원달러 환율"
+          - "달러 강세"
+          - "엔화 환율"
+        english_queries:
+          - "dollar index"
+          - "yen weakness"
+      증시_수급:
+        search_queries:
+          - "외국인 순매수"
+          - "코스피 수급"
+          - "미국 증시 마감"
+          - "나스닥 마감"
+        english_queries:
+          - "US stock market close"
+      원자재_에너지:
+        search_queries:
+          - "국제유가"
+          - "WTI 유가"
+          - "브렌트유"
+          - "금 가격"
+        english_queries:
+          - "crude oil price"
+          - "gold price"
+      미국정치_정책:
+        search_queries:
+          - "트럼프 행정부"
+          - "미국 관세"
+          - "미국 무역정책"
+        english_queries:
+          - "Trump administration tariff"
+      지정학_안보:
+        search_queries:
+          - "호르무즈 해협"
+          - "중동 정세"
+          - "우크라이나 전쟁"
+          - "미중 갈등"
+        english_queries:
+          - "geopolitical risk"
+      중국경제:
+        search_queries:
+          - "중국 경제"
+          - "인민은행"
+          - "중국 부동산"
+        english_queries:
+          - "China economy PBOC"
 # 필터링 설정
 filter:
   max_age_hours: 24
