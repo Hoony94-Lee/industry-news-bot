@@ -1,129 +1,73 @@
-"""Industry News Bot 메인 진입점.
+"""main.py 에 반영할 코드.
 
-사용법:
-    python -m src.main --mode morning
-    python -m src.main --mode evening
-    python -m src.main --mode test     # 디버깅 모드 (텔레그램 미발송)
+1) import 에 NotionWriter, is_duplicate_of_archive 추가
+2) filter_already_sent() 함수 신규 추가
+3) run_pipeline() Step 1 과 Step 2 사이에 중복 필터 단계 삽입
 """
 
-from __future__ import annotations
-
-import argparse
-import sys
-import traceback
-from typing import Literal
-
-from dotenv import load_dotenv
-
-from .claude_processor import ClaudeNewsProcessor, filter_by_category_limit
-from .news_collector import collect_all_news
-from .notion_writer import NotionWriter
-from .telegram_sender import TelegramSender
-from .utils import is_debug_mode, load_yaml_config, logger, now_kst
+# ─────────────────────────────────────────────────────────────
+# 1) import 부 (기존 import에 추가/확인)
+# ─────────────────────────────────────────────────────────────
+#
+#   from .utils import is_duplicate_of_archive   # 신규
+#   (NotionWriter 는 이미 import 되어 있음)
 
 
-def run_pipeline(mode: Literal["morning", "evening", "test"]) -> int:
-    """전체 파이프라인 실행.
+# ─────────────────────────────────────────────────────────────
+# 2) 신규 함수 (run_pipeline 위에 정의)
+# ─────────────────────────────────────────────────────────────
 
-    Returns:
-        Exit code (0 = 성공, 1 = 실패)
+def filter_already_sent(raw_news: list, writer) -> list:
+    """과거(최근 N일) 발송분과 중복되는 뉴스를 제거.
+
+    Claude 분석 '전'에 호출 → Haiku 호출 비용 절감.
+
+    Args:
+        raw_news: 수집된 RawNews 목록
+        writer: load_recent_archive() 가 호출된 NotionWriter 인스턴스
     """
-    start_time = now_kst()
-    logger.info("=" * 70)
-    logger.info(f"🚀 Industry News Bot 시작 (모드: {mode})")
-    logger.info(f"   시작 시간: {start_time.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-    if is_debug_mode():
-        logger.info("   ⚠️  DEBUG MODE 활성화 (텔레그램 미발송)")
-    logger.info("=" * 70)
+    from .utils import is_duplicate_of_archive
 
-    try:
-        # ============================================================
-        # Step 1: 뉴스 수집
-        # ============================================================
-        logger.info("\n[Step 1/4] 📡 뉴스 수집")
-        raw_news = collect_all_news()
-        if not raw_news:
-            logger.warning("수집된 뉴스가 없습니다. 종료.")
-            return 0
+    if not writer._archive_urls and not writer._archive_titles:
+        return raw_news
 
-        # ============================================================
-        # Step 2: Claude 분석
-        # ============================================================
-        logger.info(f"\n[Step 2/4] 🤖 Claude 분석 (총 {len(raw_news)}건)")
-        processor = ClaudeNewsProcessor()
-        processed = processor.analyze_batch(raw_news, max_workers=5)
-        if not processed:
-            logger.warning("분석 결과가 없습니다. 종료.")
-            return 0
+    kept: list = []
+    removed = 0
+    for news in raw_news:
+        if is_duplicate_of_archive(
+            news.title,
+            news.url,
+            writer._archive_urls,
+            writer._archive_titles,
+        ):
+            removed += 1
+            continue
+        kept.append(news)
 
-        # 카테고리당 5건 제한
-        keywords_config = load_yaml_config("keywords.yml")
-        max_per_cat = keywords_config["filter"]["max_per_category"]
-        final_list = filter_by_category_limit(processed, max_per_category=max_per_cat)
-
-        # ============================================================
-        # Step 3: Notion 저장
-        # ============================================================
-        logger.info(f"\n[Step 3/4] 📝 Notion 저장 ({len(final_list)}건)")
-        writer = NotionWriter()
-        writer.warm_up()
-        saved_list = writer.save_batch(final_list)
-
-        # ============================================================
-        # Step 4: 텔레그램 발송
-        # ============================================================
-        logger.info(f"\n[Step 4/4] 📱 텔레그램 발송 ({len(saved_list)}건)")
-        if mode == "test" or is_debug_mode():
-            # 테스트 모드: 발송 안 함, 결과만 출력
-            logger.info("테스트 모드: 텔레그램 발송 스킵")
-            for news in saved_list[:5]:
-                logger.info(
-                    f"  [{news.category}] {news.headline} "
-                    f"(중요도 {news.importance})"
-                )
-        else:
-            sender = TelegramSender()
-            tg_mode: Literal["morning", "evening"] = (
-                "morning" if mode == "morning" else "evening"
-            )
-            sender.send_digest(saved_list, mode=tg_mode)
-
-        # ============================================================
-        # 완료
-        # ============================================================
-        elapsed = now_kst() - start_time
-        logger.info("=" * 70)
-        logger.info(f"✅ 완료 (총 소요시간: {elapsed.total_seconds():.1f}초)")
-        logger.info(
-            f"   수집 {len(raw_news)} → 분석 {len(processed)} → "
-            f"필터 {len(final_list)} → 저장 {len(saved_list)}"
-        )
-        logger.info("=" * 70)
-        return 0
-
-    except Exception as e:
-        logger.error(f"❌ 파이프라인 실행 실패: {e}")
-        logger.error(traceback.format_exc())
-        return 1
-
-
-def main() -> None:
-    """CLI 엔트리포인트."""
-    # .env 파일 로드 (있으면)
-    load_dotenv()
-
-    parser = argparse.ArgumentParser(description="ECM Industry News Bot")
-    parser.add_argument(
-        "--mode",
-        choices=["morning", "evening", "test"],
-        default="test",
-        help="실행 모드: morning(아침) / evening(저녁) / test(테스트, 텔레그램 미발송)",
+    logger.info(
+        f"과거 발송분 중복 제거: {len(raw_news)}건 → {len(kept)}건 "
+        f"(제거 {removed}건)"
     )
-    args = parser.parse_args()
-
-    exit_code = run_pipeline(args.mode)
-    sys.exit(exit_code)
+    return kept
 
 
-if __name__ == "__main__":
-    main()
+# ─────────────────────────────────────────────────────────────
+# 3) run_pipeline() Step 1 직후에 삽입할 블록
+#    (raw_news = collect_all_news() 다음, processor 생성 전)
+# ─────────────────────────────────────────────────────────────
+#
+#         # ============================================================
+#         # Step 1.5: 과거 발송분 중복 제거 (분석 전 → Haiku 비용 절감)
+#         # ============================================================
+#         logger.info("\n[Step 1.5/4] 🔁 과거 발송분 중복 제거")
+#         writer = NotionWriter()
+#         writer.warm_up()
+#         writer.load_recent_archive(days=3)
+#         raw_news = filter_already_sent(raw_news, writer)
+#         if not raw_news:
+#             logger.warning("신규 뉴스가 없습니다(전부 기발송). 종료.")
+#             return 0
+#
+#  ※ 이렇게 하면 Step 3의 NotionWriter()/warm_up() 은 중복이므로,
+#    Step 3에서 writer 를 재생성하지 말고 위에서 만든 writer 를 그대로
+#    재사용하세요. (warm_up 캐시도 이미 채워져 있어 효율적)
