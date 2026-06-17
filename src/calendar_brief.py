@@ -30,6 +30,10 @@ import requests
 KST = pytz.timezone("Asia/Seoul")
 ET = pytz.timezone("America/New_York")
 FINNHUB_BASE = "https://finnhub.io/api/v1"
+FMP_BASE = "https://financialmodelingprep.com/stable"
+
+# 실적 회사명 조회 최대 종목 수 (무료 API 호출 절약). 초과분은 티커만 표기.
+MAX_PROFILE_LOOKUPS = 25
 
 # 주요 경제지표만 노출 (노이즈 컷). Finnhub event 문자열 부분일치로 필터.
 KEY_INDICATORS = [
@@ -54,21 +58,74 @@ def _get(endpoint: str, params: dict) -> dict:
     return r.json()
 
 
-def fetch_economic_calendar(date_from: str, date_to: str) -> list[dict]:
-    """경제지표 캘린더. 무료티어에서 막히면 빈 리스트 반환."""
+def _get_fmp(endpoint: str, params: dict):
+    """FMP 호출. FMP_API_KEY 없으면 None 반환."""
+    key = os.environ.get("FMP_API_KEY")
+    if not key:
+        return None
+    params["apikey"] = key
+    r = requests.get(f"{FMP_BASE}{endpoint}", params=params, timeout=15)
+    r.raise_for_status()
+    return r.json()
+
+
+# 회사명 캐시 (티커 → 영문 풀네임)
+_NAME_CACHE: dict[str, str] = {}
+
+
+def fetch_company_name(symbol: str) -> str:
+    """티커 → 영문 회사명. 실패 시 빈 문자열."""
+    if symbol in _NAME_CACHE:
+        return _NAME_CACHE[symbol]
+    name = ""
     try:
-        data = _get("/calendar/economic", {"from": date_from, "to": date_to})
+        data = _get("/stock/profile2", {"symbol": symbol})
+        name = (data or {}).get("name", "") or ""
+    except Exception:
+        name = ""
+    _NAME_CACHE[symbol] = name
+    return name
+
+
+def fetch_economic_calendar(date_from: str, date_to: str) -> list[dict]:
+    """경제지표 캘린더. FMP 우선, 실패/미설정 시 Finnhub 시도, 둘 다 안되면 빈 리스트."""
+    events = None
+
+    # 1순위: FMP (무료 플랜에 경제지표 포함)
+    try:
+        fmp_data = _get_fmp("/economic-calendar", {"from": date_from, "to": date_to})
+        if isinstance(fmp_data, list):
+            events = []
+            for ev in fmp_data:
+                if ev.get("country") not in ("US", "USA"):
+                    continue
+                events.append({
+                    "event": ev.get("event", ""),
+                    "time": ev.get("date", ""),       # 'YYYY-MM-DD HH:MM:SS' (UTC 추정)
+                    "estimate": ev.get("estimate"),
+                    "prev": ev.get("previous"),
+                })
     except requests.exceptions.HTTPError as e:
         code = e.response.status_code if e.response is not None else "?"
-        print(f"[경고] 경제지표 캘린더 호출 실패(HTTP {code}). "
-              f"무료 티어 미지원일 수 있음. 실적만 진행합니다.", file=sys.stderr)
-        return []
-    events = data.get("economicCalendar", []) or data.get("data", [])
-    # 미국 + 주요 지표만
+        print(f"[경고] FMP 경제지표 실패(HTTP {code}). Finnhub 시도.", file=sys.stderr)
+    except Exception as e:
+        print(f"[경고] FMP 경제지표 예외: {e}. Finnhub 시도.", file=sys.stderr)
+
+    # 2순위: Finnhub (무료 티어에선 막혀 있을 수 있음)
+    if events is None:
+        try:
+            data = _get("/calendar/economic", {"from": date_from, "to": date_to})
+            raw = data.get("economicCalendar", []) or data.get("data", [])
+            events = [e for e in raw if e.get("country") in ("US", "USA", None)]
+        except requests.exceptions.HTTPError as e:
+            code = e.response.status_code if e.response is not None else "?"
+            print(f"[경고] Finnhub 경제지표도 실패(HTTP {code}). 실적만 진행.",
+                  file=sys.stderr)
+            return []
+
+    # 주요 지표 키워드 필터
     out = []
-    for ev in events:
-        if ev.get("country") not in ("US", "USA", None):
-            continue
+    for ev in events or []:
         name = ev.get("event", "")
         if KEY_INDICATORS and not any(k.lower() in name.lower() for k in KEY_INDICATORS):
             continue
@@ -133,20 +190,31 @@ def build_message(econ: list[dict], earn: list[dict], date_label: str) -> str:
     lines.append("")
     lines.append("━━━━━━━━━━━━━━")
     lines.append("📈 미국 실적 발표")
+    lines.append("※ 발표 시각은 장전(BMO)/장후(AMC)까지만 제공 (분 단위 없음)")
     if earn:
         # 관심종목 우선 정렬
         def sort_key(e):
             sym = e.get("symbol", "")
             return (0 if sym in WATCH_TICKERS else 1, sym)
-        for e in sorted(earn, key=sort_key):
+        sorted_earn = sorted(earn, key=sort_key)
+
+        lookups = 0
+        for e in sorted_earn:
             sym = e.get("symbol", "?")
             star = "⭐ " if sym in WATCH_TICKERS else ""
-            hour = e.get("hour", "")  # bmo(장전)/amc(장후)
+            # 회사명 조회 (상한 내에서만)
+            name = ""
+            if lookups < MAX_PROFILE_LOOKUPS:
+                name = fetch_company_name(sym)
+                lookups += 1
+            label = f"{name} ({sym})" if name else sym
+
+            hour = e.get("hour", "")
             hour_map = {"bmo": "장전", "amc": "장후", "dmh": "장중"}
-            hour_kr = hour_map.get(hour, "")
+            hour_kr = hour_map.get(hour, "미정")
             eps = e.get("epsEstimate")
-            eps_txt = f" EPS예상 {eps}" if eps is not None else ""
-            lines.append(f"· {star}{sym} ({hour_kr}){eps_txt}")
+            eps_txt = f", EPS예상 {eps}" if eps is not None else ""
+            lines.append(f"· {star}{label} [{hour_kr}{eps_txt}]")
     else:
         lines.append("· (해당 일자 발표 예정 없음)")
 
