@@ -1,194 +1,70 @@
-"""공통 유틸 함수 모음."""
+"""utils.py 교체/추가 코드 모음.
+
+아래 내용으로 기존 utils.py의 해당 부분을 교체하거나 추가하세요.
+- normalize_title()        : 신규 추가
+- deduplicate_news()       : 기존 함수 교체
+- is_duplicate_of_archive(): 신규 추가 (과거 발송분 비교용 헬퍼)
+"""
 
 from __future__ import annotations
 
-import logging
-import os
 import re
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from pathlib import Path
-from typing import Any
-
-import pytz
-import yaml
 from rapidfuzz import fuzz
 
-# 한국 시간대
-KST = pytz.timezone("Asia/Seoul")
-
-# 로거 설정
-def setup_logger(name: str = "industry_news_bot", level: int = logging.INFO) -> logging.Logger:
-    """로거 셋업."""
-    logger = logging.getLogger(name)
-    if logger.handlers:
-        return logger
-
-    logger.setLevel(level)
-    handler = logging.StreamHandler()
-    formatter = logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
-    return logger
-
-
-logger = setup_logger()
-
 
 # ============================================================
-# 데이터 클래스
+# [신규] 제목 정규화
 # ============================================================
 
-@dataclass
-class RawNews:
-    """수집된 원본 뉴스."""
-
-    title: str
-    url: str
-    source: str  # 매체명 (예: "전자신문")
-    pub_date: datetime
-    summary: str = ""  # 요약/본문 (있으면)
-    language: str = "ko"  # ko / en
-    matched_keywords: list[str] = field(default_factory=list)  # 어느 키워드로 수집됐는지
-
-    def __hash__(self) -> int:
-        return hash(self.url)
+# 머리말/꼬리말 패턴: [속보] [단독] [종합] (종합2보) 등
+_BRACKET_RE = re.compile(r"[\[\(<【［][^\]\)>】］]{0,12}[\]\)>】］]")
+# 매체명 꼬리: " - 전자신문", " | 한국경제" 등
+_TAIL_SOURCE_RE = re.compile(r"\s*[-|·ㅣ]\s*[^-|·ㅣ]{1,15}$")
+# 한글/영문/숫자/공백 외 제거 (공백은 유지 → 토큰 비교 정확도 ↑)
+_NON_ALNUM_RE = re.compile(r"[^0-9a-z가-힣\s]")
+_MULTISPACE_RE = re.compile(r"\s+")
 
 
-@dataclass
-class ProcessedNews:
-    """Claude로 가공된 뉴스."""
+def normalize_title(title: str) -> str:
+    """제목 정규화: 머리말/매체명/특수문자 제거 후 소문자화(공백은 유지).
 
-    # 원본 정보
-    raw: RawNews
-
-    # 가공 결과
-    category: str  # "AI/데이터센터" / "반도체" / "2차전지" / "로봇"
-    keywords: list[str]  # 17개 핵심 키워드 중 매칭된 것
-    headline: str
-    core: str
-    meaning: str
-    korea_impact: str
-    related_companies: list[str]  # 한국 상장사 종목명
-    importance: int  # 1~5
-    evaluation: str  # "⭐ 핵심" / "👍 좋음" / "미평가"
-
-    # 후처리 정보 (Notion 저장 시 채워짐)
-    notion_page_id: str = ""
-    matched_company_pages: list[dict[str, str]] = field(default_factory=list)
-    # [{"name": "SK하이닉스", "page_id": "...", "has_ir_note": True}, ...]
-
-
-# ============================================================
-# 설정 파일 로딩
-# ============================================================
-
-def get_project_root() -> Path:
-    """프로젝트 루트 디렉토리 반환."""
-    return Path(__file__).parent.parent
-
-
-def load_yaml_config(filename: str) -> dict[str, Any]:
-    """config/ 디렉토리의 YAML 설정 파일 로드."""
-    config_path = get_project_root() / "config" / filename
-    with open(config_path, encoding="utf-8") as f:
-        return yaml.safe_load(f)
-
-
-def load_prompt(filename: str) -> str:
-    """prompts/ 디렉토리의 프롬프트 파일 로드."""
-    prompt_path = get_project_root() / "prompts" / filename
-    return prompt_path.read_text(encoding="utf-8")
-
-
-# ============================================================
-# 환경변수
-# ============================================================
-
-def get_env(key: str, required: bool = True, default: str = "") -> str:
-    """환경변수 가져오기 (필수 누락 시 에러)."""
-    value = os.environ.get(key, default)
-    if required and not value:
-        raise ValueError(f"Environment variable {key} is required but not set.")
-    return value
-
-
-def is_debug_mode() -> bool:
-    """디버그 모드 여부 (텔레그램 미발송)."""
-    return os.environ.get("DEBUG_MODE", "false").lower() == "true"
-
-
-# ============================================================
-# 시간 유틸
-# ============================================================
-
-def now_kst() -> datetime:
-    """현재 한국 시간."""
-    return datetime.now(KST)
-
-
-def to_kst(dt: datetime) -> datetime:
-    """datetime을 KST로 변환 (naive면 UTC로 간주)."""
-    if dt.tzinfo is None:
-        dt = pytz.utc.localize(dt)
-    return dt.astimezone(KST)
-
-
-def is_recent(dt: datetime, hours: int = 24) -> bool:
-    """N시간 이내 뉴스인지."""
-    if dt.tzinfo is None:
-        dt = pytz.utc.localize(dt)
-    return (now_kst() - to_kst(dt)) < timedelta(hours=hours)
-
-
-# ============================================================
-# 텍스트 처리
-# ============================================================
-
-def clean_html(text: str) -> str:
-    """HTML 태그 제거 및 정리."""
-    if not text:
+    교차 매체 비교 정확도를 높이기 위함.
+    예: "[속보] SK하이닉스, HBM4 양산 돌입 - 전자신문"
+        → "sk하이닉스 hbm4 양산 돌입"
+    """
+    if not title:
         return ""
-    # HTML 태그 제거
-    text = re.sub(r"<[^>]+>", "", text)
-    # HTML 엔티티 디코딩
-    text = (
-        text.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&")
-        .replace("&quot;", '"')
-        .replace("&#39;", "'")
-        .replace("&nbsp;", " ")
-    )
-    # 다중 공백 정리
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
-
-
-def normalize_url(url: str) -> str:
-    """URL 정규화 (쿼리 파라미터 일부 제거)."""
-    # 트래킹 파라미터 제거
-    url = re.sub(r"[?&](utm_[^=]+|fbclid|gclid)=[^&]*", "", url)
-    url = re.sub(r"[?&]$", "", url)
-    return url
+    t = title.strip()
+    # 대괄호/소괄호 머리말 반복 제거
+    prev = None
+    while prev != t:
+        prev = t
+        t = _BRACKET_RE.sub("", t).strip()
+    # 끝부분 매체명 꼬리 제거
+    t = _TAIL_SOURCE_RE.sub("", t).strip()
+    # 소문자화 후 영숫자/한글/공백만 남김
+    t = t.lower()
+    t = _NON_ALNUM_RE.sub(" ", t)
+    t = _MULTISPACE_RE.sub(" ", t).strip()
+    return t
 
 
 # ============================================================
-# 중복 제거
+# [교체] 중복 제거
 # ============================================================
 
 def deduplicate_news(
-    news_list: list[RawNews],
+    news_list: list,
     similarity_threshold: int = 80,
-) -> list[RawNews]:
-    """뉴스 중복 제거 (URL 완전 일치 + 제목 유사도).
+    cross_source_threshold: int | None = None,
+) -> list:
+    """뉴스 중복 제거 (URL 완전 일치 + 제목 유사도, 교차 매체 포함).
 
     Args:
-        news_list: 중복 제거할 뉴스 목록
-        similarity_threshold: 제목 유사도 임계값 (0~100)
+        news_list: 중복 제거할 뉴스 목록 (RawNews)
+        similarity_threshold: 동일 매체 내 제목 유사도 임계값 (0~100)
+        cross_source_threshold: 서로 다른 매체 간 제목 유사도 임계값.
+            None이면 similarity_threshold + 7 로 자동 설정(약간 더 엄격).
 
     Returns:
         중복 제거된 뉴스 목록 (발행일 최신순 정렬)
@@ -196,50 +72,86 @@ def deduplicate_news(
     if not news_list:
         return []
 
+    if cross_source_threshold is None:
+        cross_source_threshold = min(similarity_threshold + 7, 100)
+
     # 1단계: URL 정규화 후 완전 일치 중복 제거
     seen_urls: set[str] = set()
-    unique_by_url: list[RawNews] = []
-
+    unique_by_url: list = []
     for news in news_list:
         normalized = normalize_url(news.url)
-        if normalized not in seen_urls:
+        if normalized and normalized not in seen_urls:
             seen_urls.add(normalized)
             news.url = normalized
             unique_by_url.append(news)
 
-    # 2단계: 제목 유사도 기반 중복 제거
-    # 발행일 최신순 정렬 (최신 뉴스를 살리고 오래된 중복 제거)
+    # 2단계: 제목 유사도 기반 중복 제거 (동일 매체 + 교차 매체 모두)
     unique_by_url.sort(key=lambda x: x.pub_date, reverse=True)
 
-    final: list[RawNews] = []
+    final: list = []
+    norm_cache: list[str] = []  # final과 같은 인덱스의 정규화 제목
+
     for news in unique_by_url:
+        n_title = normalize_title(news.title)
         is_duplicate = False
-        for existing in final:
-            # 같은 소스 내에서만 비교 (다른 매체가 같은 사건 다루는 건 OK)
-            if news.source == existing.source:
-                similarity = fuzz.ratio(news.title, existing.title)
-                if similarity >= similarity_threshold:
-                    is_duplicate = True
-                    # 기존 항목에 키워드 매칭 추가
-                    existing.matched_keywords = list(
-                        set(existing.matched_keywords + news.matched_keywords)
-                    )
-                    break
+
+        for idx, existing in enumerate(final):
+            e_title = norm_cache[idx]
+            # token_set_ratio: 어순/일부 단어 차이에 강함 (교차매체 대응)
+            sim = fuzz.token_set_ratio(n_title, e_title)
+            same_source = (news.source == existing.source)
+            threshold = similarity_threshold if same_source else cross_source_threshold
+
+            if sim >= threshold:
+                is_duplicate = True
+                existing.matched_keywords = list(
+                    set(existing.matched_keywords + news.matched_keywords)
+                )
+                break
 
         if not is_duplicate:
             final.append(news)
+            norm_cache.append(n_title)
 
     logger.info(
-        f"중복 제거: {len(news_list)}건 → {len(unique_by_url)}건 (URL 기준) → "
-        f"{len(final)}건 (제목 유사도 기준)"
+        f"중복 제거: {len(news_list)}건 → {len(unique_by_url)}건 (URL) → "
+        f"{len(final)}건 (제목 유사도, 동일매체 {similarity_threshold}/"
+        f"교차매체 {cross_source_threshold})"
     )
     return final
 
 
-def truncate(text: str, max_len: int = 100) -> str:
-    """텍스트 길이 제한."""
-    if not text:
-        return ""
-    if len(text) <= max_len:
-        return text
-    return text[: max_len - 3] + "..."
+# ============================================================
+# [신규] 과거 발송분(아카이브) 대비 중복 판정
+# ============================================================
+
+def is_duplicate_of_archive(
+    title: str,
+    url: str,
+    archive_urls: set[str],
+    archive_titles: list[str],
+    similarity_threshold: int = 82,
+) -> bool:
+    """기수집/발송된 아카이브와 중복인지 판정.
+
+    Args:
+        title: 검사할 뉴스 제목
+        url: 검사할 뉴스 URL (정규화된 값 권장)
+        archive_urls: 과거 발송분 정규화 URL 집합
+        archive_titles: 과거 발송분 정규화 제목 리스트
+        similarity_threshold: 제목 유사도 임계값
+
+    Returns:
+        중복이면 True
+    """
+    norm_u = normalize_url(url)
+    if norm_u and norm_u in archive_urls:
+        return True
+
+    n_title = normalize_title(title)
+    if not n_title:
+        return False
+    for a_title in archive_titles:
+        if fuzz.token_set_ratio(n_title, a_title) >= similarity_threshold:
+            return True
+    return False
