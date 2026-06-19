@@ -1,20 +1,21 @@
 """경제지표 + 미국 실적 발표 일정 브리핑 스크립트.
 
-Finnhub 무료 API를 사용해 '오늘(KST)' 기준 경제지표 발표와
-미국 실적 발표 예정 기업을 텔레그램으로 전송한다.
+- 경제지표 일정: FRED API (무료) + FOMC 내장 일정. ET 고정 발표시각을 KST로 변환.
+- 미국 실적: Finnhub earnings calendar (무료). 회사명 풀네임 + (티커).
 
-기존 industry-news-bot 와 독립적으로 동작하는 별도 스크립트.
+경제지표는 '예상치/이전치'는 제공하지 않음(FRED는 일정만). 발표 시각은
+지표별 ET 고정시각을 KST로 자동 변환(서머타임 자동 반영).
 
 환경변수:
-    FINNHUB_API_KEY     : Finnhub API 키 (https://finnhub.io 무료 발급)
-    TELEGRAM_BOT_TOKEN  : 텔레그램 봇 토큰 (기존 봇과 공유 가능)
+    FRED_API_KEY        : https://fredaccount.stlouisfed.org 무료 발급
+    FINNHUB_API_KEY     : https://finnhub.io 무료 발급 (실적용)
+    TELEGRAM_BOT_TOKEN  : 텔레그램 봇 토큰
     TELEGRAM_CHAT_ID    : 전송 대상 채팅 ID
 
 사용법:
-    python -m src.calendar_brief
-    python -m src.calendar_brief --days 1     # 오늘만 (기본)
-    python -m src.calendar_brief --days 3     # 오늘부터 3일
-    python -m src.calendar_brief --dry-run    # 텔레그램 미발송, 출력만
+    python -m src.calendar_brief                # 오늘
+    python -m src.calendar_brief --days 3       # 오늘부터 3일
+    python -m src.calendar_brief --dry-run      # 미발송, 출력만
 """
 
 from __future__ import annotations
@@ -29,189 +30,214 @@ import requests
 
 KST = pytz.timezone("Asia/Seoul")
 ET = pytz.timezone("America/New_York")
+FRED_BASE = "https://api.stlouisfed.org/fred"
 FINNHUB_BASE = "https://finnhub.io/api/v1"
-FMP_BASE = "https://financialmodelingprep.com/stable"
 
-# 실적 회사명 조회 최대 종목 수 (무료 API 호출 절약). 초과분은 티커만 표기.
-MAX_PROFILE_LOOKUPS = 25
+MAX_PROFILE_LOOKUPS = 25  # 실적 회사명 조회 상한
 
-# 주요 경제지표만 노출 (노이즈 컷). Finnhub event 문자열 부분일치로 필터.
-KEY_INDICATORS = [
-    "Rate Decision", "Interest Rate", "FOMC", "Fed",
-    "CPI", "PPI", "PCE", "Core",
-    "Nonfarm", "Payrolls", "Unemployment", "Jobless",
-    "GDP", "Retail Sales", "ISM", "PMI",
-    "Crude Oil Inventories", "Consumer Confidence", "Michigan",
+# ─────────────────────────────────────────────────────────
+# FRED 주요 경제지표: release_id → (한국어명, ET 발표시각 HH:MM)
+# release_id는 안전을 위해 release_name 텍스트 매칭도 병행.
+# ─────────────────────────────────────────────────────────
+FRED_RELEASES = {
+    10:  ("소비자물가지수(CPI)", "08:30"),
+    46:  ("생산자물가지수(PPI)", "08:30"),
+    50:  ("고용상황(비농업)", "08:30"),
+    53:  ("GDP", "08:30"),
+    9:   ("소매판매", "08:30"),
+    13:  ("개인소득·지출(PCE)", "08:30"),
+    21:  ("산업생산", "09:15"),
+    18:  ("주요 금리(H.15)", "16:15"),
+}
+# release_name 키워드 매칭 (release_id가 바뀌어도 잡히도록)
+FRED_NAME_MAP = [
+    ("Consumer Price Index", "소비자물가지수(CPI)", "08:30"),
+    ("Producer Price Index", "생산자물가지수(PPI)", "08:30"),
+    ("Employment Situation", "고용상황(비농업)", "08:30"),
+    ("Gross Domestic Product", "GDP", "08:30"),
+    ("Advance Monthly Sales for Retail", "소매판매", "08:30"),
+    ("Personal Income", "개인소득·지출(PCE)", "08:30"),
+    ("Industrial Production", "산업생산", "09:15"),
 ]
 
-# 관심 실적 종목 (있으면 ⭐ 강조). 비우면 전체 노출.
+# ─────────────────────────────────────────────────────────
+# FOMC 결정일(둘째 날). ET 14:00 결정 / 14:30 기자회견.
+# 출처: federalreserve.gov FOMC calendars. 정기회의 8회.
+# ─────────────────────────────────────────────────────────
+FOMC_DECISION_DATES = {
+    # 2026
+    "2026-01-28", "2026-03-18", "2026-04-29", "2026-06-17",
+    "2026-07-29", "2026-09-16", "2026-10-28", "2026-12-09",
+    # 2027
+    "2027-01-27", "2027-03-17", "2027-04-28", "2027-06-09",
+    "2027-07-28", "2027-09-15", "2027-10-27", "2027-12-08",
+}
+
+# 관심 실적 종목 (⭐ 강조)
 WATCH_TICKERS = {
     "NVDA", "AMD", "AVGO", "MU", "TSM", "ASML", "AAPL", "MSFT",
     "GOOGL", "AMZN", "META", "TSLA", "INTC", "QCOM", "ARM", "SMCI",
 }
 
 
-def _get(endpoint: str, params: dict) -> dict:
-    params["token"] = os.environ["FINNHUB_API_KEY"]
-    r = requests.get(f"{FINNHUB_BASE}{endpoint}", params=params, timeout=15)
-    r.raise_for_status()
-    return r.json()
+def _et_to_kst(date_str: str, hhmm: str) -> str:
+    """ET date+time → KST 'MM/DD HH:MM' (서머타임 자동)."""
+    naive = datetime.strptime(f"{date_str} {hhmm}", "%Y-%m-%d %H:%M")
+    return ET.localize(naive).astimezone(KST).strftime("%m/%d %H:%M")
 
 
-def _get_fmp(endpoint: str, params: dict):
-    """FMP 호출. FMP_API_KEY 없으면 None 반환."""
-    key = os.environ.get("FMP_API_KEY")
-    if not key:
-        return None
-    params["apikey"] = key
-    r = requests.get(f"{FMP_BASE}{endpoint}", params=params, timeout=15)
-    r.raise_for_status()
-    return r.json()
+# ============================================================
+# 경제지표 (FRED + FOMC)
+# ============================================================
+
+def fetch_economic_events(date_from: str, date_to: str) -> list[dict]:
+    """FRED 일정 + FOMC 내장 일정 → [{kst, name}] (kst 정렬)."""
+    events: list[dict] = []
+
+    # 1) FRED release dates
+    key = os.environ.get("FRED_API_KEY")
+    if key:
+        try:
+            r = requests.get(
+                f"{FRED_BASE}/releases/dates",
+                params={
+                    "api_key": key,
+                    "file_type": "json",
+                    "realtime_start": date_from,
+                    "realtime_end": date_to,
+                    "include_release_dates_with_no_data": "true",
+                    "sort_order": "asc",
+                    "limit": 1000,
+                },
+                timeout=15,
+            )
+            r.raise_for_status()
+            for rd in r.json().get("release_dates", []):
+                d = rd.get("date", "")
+                if not (date_from <= d <= date_to):
+                    continue
+                rid = rd.get("release_id")
+                rname = rd.get("release_name", "")
+                kr, hhmm = None, None
+                if rid in FRED_RELEASES:
+                    kr, hhmm = FRED_RELEASES[rid]
+                else:
+                    for kw, k_kr, k_t in FRED_NAME_MAP:
+                        if kw.lower() in rname.lower():
+                            kr, hhmm = k_kr, k_t
+                            break
+                if kr:
+                    events.append({"kst": _et_to_kst(d, hhmm), "name": kr, "_d": d})
+        except requests.exceptions.HTTPError as e:
+            code = e.response.status_code if e.response is not None else "?"
+            print(f"[경고] FRED 호출 실패(HTTP {code}).", file=sys.stderr)
+        except Exception as e:
+            print(f"[경고] FRED 예외: {e}", file=sys.stderr)
+    else:
+        print("[경고] FRED_API_KEY 미설정. FOMC만 표기.", file=sys.stderr)
+
+    # 2) FOMC (내장)
+    cur = datetime.strptime(date_from, "%Y-%m-%d")
+    end = datetime.strptime(date_to, "%Y-%m-%d")
+    while cur <= end:
+        ds = cur.strftime("%Y-%m-%d")
+        if ds in FOMC_DECISION_DATES:
+            events.append({"kst": _et_to_kst(ds, "14:00"),
+                           "name": "FOMC 금리결정·성명", "_d": ds})
+            events.append({"kst": _et_to_kst(ds, "14:30"),
+                           "name": "FOMC 기자회견", "_d": ds})
+        cur += timedelta(days=1)
+
+    # 중복 제거 + KST 시각순 정렬
+    seen = set()
+    uniq = []
+    for ev in events:
+        k = (ev["name"], ev["kst"])
+        if k not in seen:
+            seen.add(k)
+            uniq.append(ev)
+    uniq.sort(key=lambda e: e["kst"])
+    return uniq
 
 
-# 회사명 캐시 (티커 → 영문 풀네임)
+# ============================================================
+# 실적 (Finnhub)
+# ============================================================
+
 _NAME_CACHE: dict[str, str] = {}
 
 
 def fetch_company_name(symbol: str) -> str:
-    """티커 → 영문 회사명. 실패 시 빈 문자열."""
     if symbol in _NAME_CACHE:
         return _NAME_CACHE[symbol]
     name = ""
     try:
-        data = _get("/stock/profile2", {"symbol": symbol})
-        name = (data or {}).get("name", "") or ""
+        r = requests.get(
+            f"{FINNHUB_BASE}/stock/profile2",
+            params={"symbol": symbol, "token": os.environ["FINNHUB_API_KEY"]},
+            timeout=15,
+        )
+        r.raise_for_status()
+        name = (r.json() or {}).get("name", "") or ""
     except Exception:
         name = ""
     _NAME_CACHE[symbol] = name
     return name
 
 
-def fetch_economic_calendar(date_from: str, date_to: str) -> list[dict]:
-    """경제지표 캘린더. FMP 우선, 실패/미설정 시 Finnhub 시도, 둘 다 안되면 빈 리스트."""
-    events = None
-
-    # 1순위: FMP (무료 플랜에 경제지표 포함)
-    try:
-        fmp_data = _get_fmp("/economic-calendar", {"from": date_from, "to": date_to})
-        if isinstance(fmp_data, list):
-            events = []
-            for ev in fmp_data:
-                if ev.get("country") not in ("US", "USA"):
-                    continue
-                events.append({
-                    "event": ev.get("event", ""),
-                    "time": ev.get("date", ""),       # 'YYYY-MM-DD HH:MM:SS' (UTC 추정)
-                    "estimate": ev.get("estimate"),
-                    "prev": ev.get("previous"),
-                })
-    except requests.exceptions.HTTPError as e:
-        code = e.response.status_code if e.response is not None else "?"
-        print(f"[경고] FMP 경제지표 실패(HTTP {code}). Finnhub 시도.", file=sys.stderr)
-    except Exception as e:
-        print(f"[경고] FMP 경제지표 예외: {e}. Finnhub 시도.", file=sys.stderr)
-
-    # 2순위: Finnhub (무료 티어에선 막혀 있을 수 있음)
-    if events is None:
-        try:
-            data = _get("/calendar/economic", {"from": date_from, "to": date_to})
-            raw = data.get("economicCalendar", []) or data.get("data", [])
-            events = [e for e in raw if e.get("country") in ("US", "USA", None)]
-        except requests.exceptions.HTTPError as e:
-            code = e.response.status_code if e.response is not None else "?"
-            print(f"[경고] Finnhub 경제지표도 실패(HTTP {code}). 실적만 진행.",
-                  file=sys.stderr)
-            return []
-
-    # 주요 지표 키워드 필터
-    out = []
-    for ev in events or []:
-        name = ev.get("event", "")
-        if KEY_INDICATORS and not any(k.lower() in name.lower() for k in KEY_INDICATORS):
-            continue
-        out.append(ev)
-    return out
-
-
-def fetch_earnings_calendar(date_from: str, date_to: str) -> list[dict]:
-    """미국 실적 발표 캘린더."""
-    try:
-        data = _get("/calendar/earnings", {"from": date_from, "to": date_to})
-    except requests.exceptions.HTTPError as e:
-        code = e.response.status_code if e.response is not None else "?"
-        print(f"[경고] 실적 캘린더 호출 실패(HTTP {code}).", file=sys.stderr)
+def fetch_earnings(date_from: str, date_to: str) -> list[dict]:
+    key = os.environ.get("FINNHUB_API_KEY")
+    if not key:
+        print("[경고] FINNHUB_API_KEY 미설정. 실적 생략.", file=sys.stderr)
         return []
-    return data.get("earningsCalendar", [])
+    try:
+        r = requests.get(
+            f"{FINNHUB_BASE}/calendar/earnings",
+            params={"from": date_from, "to": date_to, "token": key},
+            timeout=15,
+        )
+        r.raise_for_status()
+        return r.json().get("earningsCalendar", [])
+    except requests.exceptions.HTTPError as e:
+        code = e.response.status_code if e.response is not None else "?"
+        print(f"[경고] 실적 캘린더 실패(HTTP {code}).", file=sys.stderr)
+        return []
 
 
-def _econ_time_kst(time_str: str) -> str:
-    """Finnhub 경제지표 time(UTC) → KST 'MM/DD HH:MM'.
-
-    Finnhub time 형식은 보통 'YYYY-MM-DD HH:MM:SS' (UTC).
-    파싱 실패하거나 시각이 없으면 빈 문자열 반환(날짜만 표기).
-    """
-    if not time_str:
-        return ""
-    s = str(time_str).replace("T", " ")
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
-        try:
-            naive = datetime.strptime(s[:19] if len(s) >= 19 else s, fmt)
-            utc_dt = pytz.utc.localize(naive)
-            return utc_dt.astimezone(KST).strftime("%m/%d %H:%M")
-        except Exception:
-            continue
-    return ""
-
+# ============================================================
+# 메시지
+# ============================================================
 
 def build_message(econ: list[dict], earn: list[dict], date_label: str) -> str:
     lines = ["⚡️ 주요 일정 브리핑", f"📅 {date_label} (KST 기준)", ""]
 
-    # --- 경제지표 ---
     lines.append("━━━━━━━━━━━━━━")
     lines.append("📊 경제지표")
     if econ:
         for ev in econ:
-            name = ev.get("event", "?")
-            t_kst = _econ_time_kst(ev.get("time", ""))
-            est = ev.get("estimate")
-            prev = ev.get("prev")
-            detail = []
-            if est is not None:
-                detail.append(f"예상 {est}")
-            if prev is not None:
-                detail.append(f"이전 {prev}")
-            tail = f" ({', '.join(detail)})" if detail else ""
-            prefix = f"{t_kst} – " if t_kst else "· "
-            lines.append(f"{prefix}{name}{tail}")
+            lines.append(f"{ev['kst']} – {ev['name']}")
     else:
-        lines.append("· (해당 일자 주요 지표 없음 또는 미지원)")
+        lines.append("· (해당 일자 주요 지표 없음)")
 
-    # --- 실적 ---
     lines.append("")
     lines.append("━━━━━━━━━━━━━━")
     lines.append("📈 미국 실적 발표")
-    lines.append("※ 발표 시각은 장전(BMO)/장후(AMC)까지만 제공 (분 단위 없음)")
+    lines.append("※ 발표 시각은 장전(BMO)/장후(AMC)까지만 제공")
     if earn:
-        # 관심종목 우선 정렬
         def sort_key(e):
             sym = e.get("symbol", "")
             return (0 if sym in WATCH_TICKERS else 1, sym)
-        sorted_earn = sorted(earn, key=sort_key)
-
         lookups = 0
-        for e in sorted_earn:
+        for e in sorted(earn, key=sort_key):
             sym = e.get("symbol", "?")
             star = "⭐ " if sym in WATCH_TICKERS else ""
-            # 회사명 조회 (상한 내에서만)
             name = ""
             if lookups < MAX_PROFILE_LOOKUPS:
                 name = fetch_company_name(sym)
                 lookups += 1
             label = f"{name} ({sym})" if name else sym
-
             hour = e.get("hour", "")
-            hour_map = {"bmo": "장전", "amc": "장후", "dmh": "장중"}
-            hour_kr = hour_map.get(hour, "미정")
+            hour_kr = {"bmo": "장전", "amc": "장후", "dmh": "장중"}.get(hour, "미정")
             eps = e.get("epsEstimate")
             eps_txt = f", EPS예상 {eps}" if eps is not None else ""
             lines.append(f"· {star}{label} [{hour_kr}{eps_txt}]")
@@ -224,15 +250,18 @@ def build_message(econ: list[dict], earn: list[dict], date_label: str) -> str:
 def send_telegram(text: str) -> None:
     token = os.environ["TELEGRAM_BOT_TOKEN"]
     chat_id = os.environ["TELEGRAM_CHAT_ID"]
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    r = requests.post(url, json={"chat_id": chat_id, "text": text}, timeout=15)
+    r = requests.post(
+        f"https://api.telegram.org/bot{token}/sendMessage",
+        json={"chat_id": chat_id, "text": text},
+        timeout=15,
+    )
     r.raise_for_status()
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="경제지표+실적 일정 브리핑")
-    parser.add_argument("--days", type=int, default=1, help="오늘부터 N일 (기본 1)")
-    parser.add_argument("--dry-run", action="store_true", help="텔레그램 미발송")
+    parser = argparse.ArgumentParser(description="경제지표(FRED)+실적(Finnhub) 일정 브리핑")
+    parser.add_argument("--days", type=int, default=1)
+    parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
     today = datetime.now(KST)
@@ -240,9 +269,8 @@ def main() -> int:
     date_to = (today + timedelta(days=args.days - 1)).strftime("%Y-%m-%d")
     date_label = date_from if args.days == 1 else f"{date_from} ~ {date_to}"
 
-    econ = fetch_economic_calendar(date_from, date_to)
-    earn = fetch_earnings_calendar(date_from, date_to)
-
+    econ = fetch_economic_events(date_from, date_to)
+    earn = fetch_earnings(date_from, date_to)
     msg = build_message(econ, earn, date_label)
 
     if args.dry_run:
