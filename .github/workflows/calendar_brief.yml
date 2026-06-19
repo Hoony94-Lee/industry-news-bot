@@ -2,9 +2,9 @@ name: Calendar Brief (경제지표+실적)
 
 on:
   schedule:
-    # KST 07:30 = UTC 22:30 (전일). 장 시작 전 당일 일정 발송
-    - cron: '30 22 * * 0-4'   # 일~목(UTC) = 월~금(KST) 아침
-  workflow_dispatch:           # 수동 실행 버튼
+    # KST 07:30 = UTC 22:30 (전일). 월~금(KST) 아침
+    - cron: '30 22 * * 0-4'
+  workflow_dispatch:
 
 jobs:
   brief:
@@ -18,8 +18,8 @@ jobs:
         run: pip install requests pytz
       - name: Send calendar brief
         env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
-          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python -m src.calendar_brief --days 1
