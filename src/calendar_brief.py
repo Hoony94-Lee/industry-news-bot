@@ -36,29 +36,41 @@ FINNHUB_BASE = "https://finnhub.io/api/v1"
 MAX_PROFILE_LOOKUPS = 25  # 실적 회사명 조회 상한
 
 # ─────────────────────────────────────────────────────────
-# FRED 주요 경제지표: release_id → (한국어명, ET 발표시각 HH:MM)
-# release_id는 안전을 위해 release_name 텍스트 매칭도 병행.
+# FRED 주요 경제지표 매핑 (release_name 부분일치 → 한국어명, ET 발표시각).
+# 발표시각은 BLS/Census/BEA/연준 공식 고정 스케줄 기준(ET).
+# 순서 = 우선순위. 위에 둘수록 핵심 지표.
+# 지표를 빼고 싶으면 해당 줄을 삭제, 시각이 다르면 끝 값을 수정.
 # ─────────────────────────────────────────────────────────
-FRED_RELEASES = {
-    10:  ("소비자물가지수(CPI)", "08:30"),
-    46:  ("생산자물가지수(PPI)", "08:30"),
-    50:  ("고용상황(비농업)", "08:30"),
-    53:  ("GDP", "08:30"),
-    9:   ("소매판매", "08:30"),
-    13:  ("개인소득·지출(PCE)", "08:30"),
-    21:  ("산업생산", "09:15"),
-    18:  ("주요 금리(H.15)", "16:15"),
-}
-# release_name 키워드 매칭 (release_id가 바뀌어도 잡히도록)
 FRED_NAME_MAP = [
-    ("Consumer Price Index", "소비자물가지수(CPI)", "08:30"),
-    ("Producer Price Index", "생산자물가지수(PPI)", "08:30"),
-    ("Employment Situation", "고용상황(비농업)", "08:30"),
-    ("Gross Domestic Product", "GDP", "08:30"),
-    ("Advance Monthly Sales for Retail", "소매판매", "08:30"),
-    ("Personal Income", "개인소득·지출(PCE)", "08:30"),
-    ("Industrial Production", "산업생산", "09:15"),
+    # === 1군: 최상위 ===
+    ("Employment Situation",                  "고용상황(비농업)",          "08:30"),
+    ("Consumer Price Index",                  "CPI(소비자물가)",           "08:30"),
+    ("Personal Income and Outlays",           "PCE(개인소비지출물가)",     "08:30"),
+    # === 2군: 상위 ===
+    ("Producer Price Index",                  "PPI(생산자물가)",           "08:30"),
+    ("Advance Monthly Sales for Retail",      "소매판매",                  "08:30"),
+    ("Unemployment Insurance Weekly Claims",  "신규 실업수당 청구",        "08:30"),
+    ("Gross Domestic Product",                "GDP",                       "08:30"),
+    ("Job Openings and Labor Turnover",       "JOLTS(구인이직)",           "10:00"),
+    # === 3군: 보조 ===
+    ("Industrial Production",                 "산업생산",                  "09:15"),
+    ("New Residential Construction",          "신규주택착공",              "08:30"),
+    ("New Residential Sales",                 "신규주택판매",              "10:00"),
+    ("Existing Home Sales",                   "기존주택판매",              "10:00"),
+    ("Surveys of Consumers",                  "미시간대 소비자심리",       "10:00"),
+    ("Empire State Manufacturing Survey",     "엠파이어스테이트 제조업",   "08:30"),
+    ("Manufacturing Business Outlook Survey", "필라델피아 연준 제조업",    "08:30"),
+    ("U.S. International Trade",               "무역수지",                  "08:30"),
+    ("Employment Cost Index",                 "고용비용지수(ECI)",         "08:30"),
+    ("Productivity and Costs",                "생산성·단위노동비용",       "08:30"),
+    ("Construction Spending",                 "건설지출",                  "10:00"),
+    ("New Orders",                            "내구재·공장주문",           "10:00"),
+    ("House Price Index",                     "주택가격지수(FHFA)",        "09:00"),
+    ("S&P Cotality Case-Shiller",             "케이스실러 주택가격",       "09:00"),
+    ("G.19 Consumer Credit",                  "소비자신용",                "15:00"),
 ]
+# (구버전 호환용 — 더 이상 사용 안 함)
+FRED_RELEASES: dict[int, tuple[str, str]] = {}
 
 # ─────────────────────────────────────────────────────────
 # FOMC 결정일(둘째 날). ET 14:00 결정 / 14:30 기자회견.
@@ -116,16 +128,12 @@ def fetch_economic_events(date_from: str, date_to: str) -> list[dict]:
                 d = rd.get("date", "")
                 if not (date_from <= d <= date_to):
                     continue
-                rid = rd.get("release_id")
                 rname = rd.get("release_name", "")
                 kr, hhmm = None, None
-                if rid in FRED_RELEASES:
-                    kr, hhmm = FRED_RELEASES[rid]
-                else:
-                    for kw, k_kr, k_t in FRED_NAME_MAP:
-                        if kw.lower() in rname.lower():
-                            kr, hhmm = k_kr, k_t
-                            break
+                for kw, k_kr, k_t in FRED_NAME_MAP:
+                    if kw.lower() in rname.lower():
+                        kr, hhmm = k_kr, k_t
+                        break
                 if kr:
                     events.append({"kst": _et_to_kst(d, hhmm), "name": kr, "_d": d})
         except requests.exceptions.HTTPError as e:
